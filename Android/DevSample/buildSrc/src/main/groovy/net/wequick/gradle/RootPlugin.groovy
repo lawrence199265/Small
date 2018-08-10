@@ -1,11 +1,16 @@
 package net.wequick.gradle
 
 import net.wequick.gradle.aapt.SymbolParser
+import net.wequick.gradle.support.KotlinCompat
+import net.wequick.gradle.tasks.CleanBundleTask
 import net.wequick.gradle.tasks.LintTask
 import net.wequick.gradle.util.DependenciesUtils
 import net.wequick.gradle.util.Log
 import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.execution.TaskExecutionListener
 import org.gradle.api.tasks.Delete
+import org.gradle.api.tasks.TaskState
 
 import java.text.DecimalFormat
 
@@ -30,6 +35,8 @@ class RootPlugin extends BasePlugin {
     @Override
     protected void configureProject() {
         super.configureProject()
+
+        injectBuildLog()
 
         def rootExt = small
 
@@ -64,6 +71,11 @@ class RootPlugin extends BasePlugin {
                     return
                 }
 
+                if (it.name == 'small-databinding') {
+                    rootExt.smallBindingProject = it
+                    return
+                }
+
                 if (it.name == rootExt.hostModuleName) {
                     // Host
                     it.apply plugin: HostPlugin
@@ -77,6 +89,13 @@ class RootPlugin extends BasePlugin {
                     if (type == null) {
                         def idx = it.name.indexOf('.')
                         if (idx < 0) return
+
+                        char c = it.name.charAt(idx + 1)
+                        if (c.isDigit()) {
+                            // This might be a local aar module composed by name and version
+                            // as 'feature-1.1.0'
+                            return
+                        }
 
                         type = it.name.substring(0, idx)
                     }
@@ -106,19 +125,6 @@ class RootPlugin extends BasePlugin {
                         bundleModules.put(type, modules)
                     }
                     modules.add(it.name)
-                }
-
-                // Hook on project build started and finished for log
-                // FIXME: any better way to hooks?
-                it.afterEvaluate {
-                    it.tasks['preBuild'].doFirst {
-                        logStartBuild(it.project)
-                        if (it.project.hasProperty('assembleRelease')) {
-                            it.project.tasks['assembleRelease'].doLast {
-                                logFinishBuild(it.project)
-                            }
-                        }
-                    }
                 }
 
                 if (it.hasProperty('buildLib')) {
@@ -151,9 +157,13 @@ class RootPlugin extends BasePlugin {
                             it.dependencies.add('compile', stub)
                         }
                     }
+
+                    stub.task('cleanLib', type: CleanBundleTask)
                 }
             }
         }
+
+        compatVendors()
     }
 
     protected void configVersions(Project p, RootExtension.AndroidConfig base) {
@@ -171,9 +181,11 @@ class RootPlugin extends BasePlugin {
             def cfg = p.configurations.compile
             def supportDependencies = []
             cfg.dependencies.each { d ->
-                if (d.group == 'com.android.support' && d.version != sv) {
-                    supportDependencies.add(d)
-                }
+                if (d.group != 'com.android.support') return
+                if (d.name == 'multidex') return
+                if (d.version == sv) return
+
+                supportDependencies.add(d)
             }
             cfg.dependencies.removeAll(supportDependencies)
             supportDependencies.each { d ->
@@ -190,11 +202,33 @@ class RootPlugin extends BasePlugin {
         }
         project.task('buildLib', group: 'small', description: 'Build all libraries').doFirst {
             buildingLibIndex = 1
+            // Copy the small-databinding-stub jar
+            def stubJarName = 'small-databinding-stub.jar'
+            InputStream is = getClass().getClassLoader().getResourceAsStream(stubJarName)
+            if (is != null) {
+                def preJarDir = small.preBaseJarDir
+                if (!preJarDir.exists()) preJarDir.mkdirs()
+
+                File destJar = new File(preJarDir, stubJarName)
+                if (!destJar.exists()) {
+                    OutputStream out = new FileOutputStream(destJar)
+                    byte[] buffer = new byte[1024];
+                    int read;
+                    while ((read = is.read(buffer)) != -1) {
+                        out.write(buffer, 0, read);
+                    }
+                    out.flush();
+                    out.close();
+                }
+
+                is.close();
+            }
         }
         project.task('cleanBundle', group: 'small', description: 'Clean all bundles')
         project.task('buildBundle', group: 'small', description: 'Build all bundles')
+        project.task('smallLint', type: LintTask, group: 'small', description: 'Verify bundles')
 
-        project.task('small') << {
+        project.task('small', group: 'small', description: 'Print bundle environments').doLast {
 
             println()
             println '### Compile-time'
@@ -203,12 +237,9 @@ class RootPlugin extends BasePlugin {
 
             // gradle-small
             print String.format('%24s', 'gradle-small plugin : ')
-            def pluginVersion
-            def pluginProperties = project.file('buildSrc/gradle.properties')
+            def pluginVersion = small.PLUGIN_VERSION
+            def pluginProperties = project.file('buildSrc/src/main/resources/META-INF/gradle-plugins/net.wequick.small.properties')
             if (pluginProperties.exists()) {
-                def prop = new Properties()
-                prop.load(pluginProperties.newDataInputStream())
-                pluginVersion = prop.getProperty('version')
                 println "$pluginVersion (project)"
             } else {
                 def config = project.buildscript.configurations['classpath']
@@ -253,6 +284,32 @@ class RootPlugin extends BasePlugin {
                     // remote maven:
                     // ~/.gradle/caches/modules-2/files-2.1/net.wequick.tools.build/gradle-small/1.0.0-beta9/8db229545a888ab25e210a9e574c0261e6a7a52d/gradle-small-1.0.0-beta9.jar
                     println "$aarVersion (maven)"
+                }
+            }
+
+            // small databinding
+            if (small.hostProject.android.dataBinding.enabled) {
+                print String.format('%24s', 'small binding aar : ')
+                if (small.smallBindingProject != null) {
+                    def prop = new Properties()
+                    prop.load(small.smallBindingProject.file('gradle.properties').newDataInputStream())
+                    println "${prop.getProperty('version')} (project)"
+                } else {
+                    def aarVersion = small.bindingAarVersion
+                    def module = small.hostProject.configurations.compile
+                            .resolvedConfiguration.firstLevelModuleDependencies.find {
+                        it.moduleGroup == 'small.support' && it.moduleName == 'databinding'
+                    }
+                    File pluginDir = module.moduleArtifacts.first().file.parentFile
+                    if (pluginDir.name == module.moduleVersion) {
+                        // local maven:
+                        // ~/.m2/repository/net/wequick/tools/build/gradle-small/1.0.0-beta9/gradle-small-1.0.0-beta9.jar
+                        println "$aarVersion (local maven)"
+                    } else {
+                        // remote maven:
+                        // ~/.gradle/caches/modules-2/files-2.1/net.wequick.tools.build/gradle-small/1.0.0-beta9/8db229545a888ab25e210a9e574c0261e6a7a52d/gradle-small-1.0.0-beta9.jar
+                        println "$aarVersion (maven)"
+                    }
                 }
             }
 
@@ -331,23 +388,6 @@ class RootPlugin extends BasePlugin {
             printRows(rows)
             println()
         }
-
-        project.afterEvaluate {
-            small.hostProject.afterEvaluate {
-                def flavorName = 'Release'
-                com.android.build.gradle.AppExtension android = it.android
-                if (android.productFlavors.size() > 0) {
-                    flavorName = android.productFlavors[0].name.capitalize() + 'Release'
-                }
-
-                def hostDexTaskName = ":app:transformClassesWithDexFor$flavorName"
-                project.task('smallLint',
-                        type: LintTask,
-                        dependsOn: [hostDexTaskName]) {
-                    rootSmall = small
-                }
-            }
-        }
     }
 
     static def getVersions(Project p) {
@@ -358,7 +398,7 @@ class RootPlugin extends BasePlugin {
         }
         def cfg = p.configurations.compile
         def supportLib = cfg.dependencies.find { d ->
-            d.group == 'com.android.support'
+            d.group == 'com.android.support' && d.name != 'multidex'
         }
         def supportVer = supportLib != null ? supportLib.version : ''
         return [sdk: sdk,
@@ -436,17 +476,18 @@ class RootPlugin extends BasePlugin {
             }
         }
         //  - copy dependencies jars
-        ext.explodeAarDirs.each {
-            // explodedDir: **/exploded-aar/$group/$artifact/$version
-            File version = it
-            File jarDir = new File(version, 'jars')
+        ext.buildCaches.each { k, v ->
+            // explodedDir: [key:value]
+            // [com.android.support/appcompat-v7/25.2.0:\Users\admin\.android\build-cache\hash\output]
+            File jarDir = new File(v, 'jars')
             File jarFile = new File(jarDir, 'classes.jar')
             if (!jarFile.exists()) return
-
-            File artifact = version.parentFile
-            File group = artifact.parentFile
+            def key = k.split("/")
+            def group = key[0]
+            def artifact = key[1]
+            def version = key[2]
             File destFile = new File(preJarDir,
-                    "${group.name}-${artifact.name}-${version.name}.jar")
+                    "${group}-${artifact}-${version}.jar")
             if (destFile.exists()) return
 
             project.copy {
@@ -460,7 +501,7 @@ class RootPlugin extends BasePlugin {
             libDir.listFiles().each { jar ->
                 if (!jar.name.endsWith('.jar')) return
 
-                destFile = new File(preJarDir, "${group.name}-${artifact.name}-${jar.name}")
+                destFile = new File(preJarDir, "${group}-${artifact}-${jar.name}")
                 if (destFile.exists()) return
 
                 project.copy {
@@ -546,8 +587,13 @@ class RootPlugin extends BasePlugin {
             // Hereby we also mark 'support-compat' has compiled in host.
             // FIXME: any influence of this?
             if (lib == small.hostProject) {
-                aarPw.println "com.android.support:support-compat:+"
-                aarPw.println "com.android.support:support-core-utils:+"
+                String[] builtinAars = ['com.android.support:support-compat:+',
+                                        'com.android.support:support-core-utils:+']
+                builtinAars.each {
+                    if (!aarKeys.contains(it)) {
+                        aarPw.println it
+                    }
+                }
             }
 
             allDependencies.each { d ->
@@ -581,6 +627,32 @@ class RootPlugin extends BasePlugin {
         }
     }
 
+    private void compatVendors() {
+        // Check if has kotlin
+        project.afterEvaluate {
+            KotlinCompat.compat(project, small.kotlin)
+        }
+    }
+
+    /** Hook on project build started and finished for log */
+    private void injectBuildLog() {
+        project.gradle.taskGraph.addTaskExecutionListener(new TaskExecutionListener() {
+            @Override
+            void beforeExecute(Task task) { }
+
+            @Override
+            void afterExecute(Task task, TaskState taskState) {
+                if (taskState.didWork) {
+                    if (task.name == 'preBuild') {
+                        logStartBuild(task.project)
+                    } else if (task.name == 'assembleRelease') {
+                        logFinishBuild(task.project)
+                    }
+                }
+            }
+        })
+    }
+
     private void logStartBuild(Project project) {
         BaseExtension ext = project.small
         switch (ext.type) {
@@ -591,7 +663,7 @@ class RootPlugin extends BasePlugin {
                 if (buildingLibIndex > 0 && buildingLibIndex <= small.libCount) {
                     Log.header "building library ${buildingLibIndex++} of ${small.libCount} - " +
                             "${project.name} (0x${ext.packageIdStr})"
-                } else {
+                } else if (ext.type != PluginType.Host) {
                     Log.header "building library ${project.name} (0x${ext.packageIdStr})"
                 }
                 break
@@ -603,13 +675,13 @@ class RootPlugin extends BasePlugin {
         }
     }
 
-    private void logFinishBuild(Project project) {
+    private static void logFinishBuild(Project project) {
         project.android.applicationVariants.each { variant ->
             if (variant.buildType.name != 'release') return
 
             variant.outputs.each { out ->
                 File outFile = out.outputFile
-                Log.footer "-- output: ${outFile.parentFile.name}/${outFile.name} " +
+                Log.result "${outFile.parentFile.name}/${outFile.name} " +
                         "(${outFile.length()} bytes = ${getFileSize(outFile)})"
             }
         }

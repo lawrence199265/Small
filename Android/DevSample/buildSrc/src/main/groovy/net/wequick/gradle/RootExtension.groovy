@@ -34,11 +34,22 @@ public class RootExtension extends BaseExtension {
     private static final String REQUIRED_AAR_VERSION = '1.0.0'
     private static final VersionNumber REQUIRED_AAR_REVISION = VersionNumber.parse(REQUIRED_AAR_VERSION)
 
+    /** The built version of gradle-small plugin */
+    public static final String PLUGIN_VERSION = '1.5.0-beta2'
+    public static final VersionNumber PLUGIN_REVISION = VersionNumber.parse(PLUGIN_VERSION)
+
+    private static final String BINDING_AAR_VERSION = '1.1.2'
+
     /** 
      * Version of aar net.wequick.small:small
      * default to `gradle-small' plugin version 
      */
     String aarVersion
+
+    /**
+     * Version of aar net.wequick.support:databinding
+     */
+    String bindingAarVersion
 
     /**
      * Host module name
@@ -55,12 +66,18 @@ public class RootExtension extends BaseExtension {
     boolean strictSplitResources = true
 
     /**
-     * The default android version configuration
+     * The default android configurations
      * - compileSdkVersion
      * - buildToolsVersion
      * - support library version (AppCompat and etc.)
      */
     protected AndroidConfig android
+
+    /**
+     * The default kotlin configurations
+     * - version, the kotlin tools version
+     */
+    protected KotlinConfig kotlin
 
     /**
      * If <tt>true</tt> build plugins to host assets as *.apk,
@@ -76,6 +93,9 @@ public class RootExtension extends BaseExtension {
 
     /** Project of Small AAR module */
     protected Project smallProject
+
+    /** Project of Small data-binding AAR module */
+    protected Project smallBindingProject;
 
     /** Project of host */
     protected Project hostProject
@@ -183,9 +203,14 @@ public class RootExtension extends BaseExtension {
 
     public String getAarVersion() {
         if (aarVersion == null) {
-            throw new RuntimeException(
-                    'Please specify Small aar version in your root build.gradle:\n' +
-                            "small {\n    aarVersion = '[the_version]'\n}")
+            // Try to use the version of gradle-small plugin
+            if (PLUGIN_REVISION < VersionNumber.parse('1.1.0-alpha2')) {
+                throw new RuntimeException(
+                        'Please specify Small aar version in your root build.gradle:\n' +
+                                "small {\n    aarVersion = '[the_version]'\n}")
+            }
+
+            return PLUGIN_VERSION
         }
 
         if (aarRevision == null) {
@@ -202,6 +227,16 @@ public class RootExtension extends BaseExtension {
         }
 
         return aarVersion
+    }
+
+    public String getBindingAarVersion() {
+        if (bindingAarVersion != null) return bindingAarVersion
+
+        return BINDING_AAR_VERSION
+    }
+
+    public void setBindingAarVersion(String version) {
+        bindingAarVersion = version
     }
 
     Map<String, Set<String>> bundleModules = [:]
@@ -222,6 +257,27 @@ public class RootExtension extends BaseExtension {
             bundleModules.put(type, modules)
         }
         modules.addAll(names)
+    }
+
+    public File getBundleOutput(String bundleId) {
+        def outputDir = outputBundleDir
+        if (buildToAssets) {
+            return new File(outputDir, "${bundleId}.apk")
+        } else {
+            def arch = System.properties['bundle.arch'] // Get from command line (-Dbundle.arch=xx)
+            if (arch == null) {
+                // Read from local.properties (bundle.arch=xx)
+                def prop = new Properties()
+                def file = project.rootProject.file('local.properties')
+                if (file.exists()) {
+                    prop.load(file.newDataInputStream())
+                    arch = prop.getProperty('bundle.arch')
+                }
+                if (arch == null) arch = 'armeabi' // Default
+            }
+            def so = "lib${bundleId.replaceAll('\\.', '_')}.so"
+            return new File(outputDir, "$arch/$so")
+        }
     }
 
     /** Check if is building any libs (lib.*) */
@@ -281,5 +337,14 @@ public class RootExtension extends BaseExtension {
         int compileSdkVersion
         String buildToolsVersion
         String supportVersion
+    }
+
+    public def kotlin(Closure closure) {
+        kotlin = new KotlinConfig()
+        project.configure(kotlin, closure)
+    }
+
+    class KotlinConfig {
+        String version
     }
 }

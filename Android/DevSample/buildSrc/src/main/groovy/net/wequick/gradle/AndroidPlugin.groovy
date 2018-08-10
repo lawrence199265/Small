@@ -4,6 +4,9 @@ import com.android.build.gradle.api.BaseVariant
 import com.android.build.gradle.internal.pipeline.TransformTask
 import com.android.build.gradle.internal.transforms.ProGuardTransform
 import com.android.build.gradle.internal.tasks.PrepareLibraryTask
+import com.android.build.gradle.tasks.MergeManifests
+import net.wequick.gradle.util.AarPath
+import net.wequick.gradle.util.TaskUtils
 import org.gradle.api.Project
 
 class AndroidPlugin extends BasePlugin {
@@ -83,6 +86,15 @@ class AndroidPlugin extends BasePlugin {
             project.dependencies.add(smallCompileType, "${SMALL_AAR_PREFIX}$rootSmall.aarVersion")
         }
 
+        // Add common ProGuard rules from stub modules
+        android.buildTypes.each { buildType ->
+            if (buildType.minifyEnabled) {
+                rootSmall.hostStubProjects.each { stub ->
+                    buildType.proguardFiles.add(stub.file('proguard-rules.pro'))
+                }
+            }
+        }
+
         def preBuild = project.tasks['preBuild']
         if (released) {
             preBuild.doFirst {
@@ -94,7 +106,9 @@ class AndroidPlugin extends BasePlugin {
             }
         }
         preBuild.doLast {
-            removeUnimplementedProviders()
+            if (!released) {
+                removeUnimplementedProviders()
+            }
         }
     }
 
@@ -109,15 +123,30 @@ class AndroidPlugin extends BasePlugin {
      * So we need to remove all the unimplemented content providers from `Stub`.
      */
     protected void removeUnimplementedProviders() {
-        if (pluginType == PluginType.Library ||
-                pluginType == PluginType.Host) return // nothing to do with `lib.*` and host
+        if (pluginType == PluginType.Host) return // nothing to do with host
 
-        project.tasks.withType(PrepareLibraryTask.class).findAll {
-            def name = it.explodedDir.parentFile.name
-            return (rootSmall.hostStubProjects.find { it.name == name } != null)
-        }.each {
+        final def appId = android.defaultConfig.applicationId
+        if (appId == null) return // nothing to do with non-app module
+
+        MergeManifests manifests = project.tasks.withType(MergeManifests.class)[0]
+        if (manifests.hasProperty('providers')) {
+            return // can be simply stripped from providers
+        }
+
+        project.tasks.withType(PrepareLibraryTask.class).each {
             it.doLast { PrepareLibraryTask aar ->
-                File manifest = new File(aar.explodedDir, 'AndroidManifest.xml')
+                AarPath aarPath = TaskUtils.getBuildCache(aar)
+                File aarDir = aarPath.getOutputDir()
+                if (aarDir == null) {
+                    return
+                }
+
+                def aarName = aarPath.module.name
+                if (rootSmall.hostStubProjects.find { it.name == aarName } != null) {
+                    return
+                }
+
+                File manifest = new File(aarDir, 'AndroidManifest.xml')
                 def s = ''
                 boolean enteredProvider = false
                 boolean removed = false
@@ -137,7 +166,6 @@ class AndroidPlugin extends BasePlugin {
                         providerLines = ''
                     }
 
-                    final def appId = android.defaultConfig.applicationId
                     final def nameTag = 'android:name="'
                     loc = line.indexOf(nameTag)
                     if (loc >= 0) {
@@ -176,6 +204,9 @@ class AndroidPlugin extends BasePlugin {
         pt.keep('class android.support.** { *; }')
         pt.keep('interface android.support.** { *; }')
 
+        // Don't warn data binding library (cause we strip it from bundles)
+        pt.dontwarn('android.databinding.**')
+
         // Keep Small library
         pt.dontwarn('net.wequick.small.**')
         pt.keep('class net.wequick.small.Small { public *; }')
@@ -197,9 +228,11 @@ class AndroidPlugin extends BasePlugin {
     protected void configureReleaseVariant(BaseVariant variant) {
         // Init default output file (*.apk)
         small.outputFile = variant.outputs[0].outputFile
-        small.explodeAarDirs = project.tasks
-                .withType(PrepareLibraryTask.class)
-                .collect { it.explodedDir }
+
+        small.buildCaches = new HashMap<String, File>()
+        project.tasks.withType(PrepareLibraryTask.class).each {
+            TaskUtils.collectAarBuildCacheDir(it, small.buildCaches)
+        }
 
         // Hook variant tasks
         variant.assemble.doLast {

@@ -22,6 +22,7 @@ import android.app.Instrumentation;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
+import android.content.pm.ServiceInfo;
 import android.content.res.AssetManager;
 import android.content.res.Configuration;
 import android.content.res.Resources;
@@ -29,7 +30,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.util.ArrayMap;
-import android.util.DisplayMetrics;
+import android.view.ContextThemeWrapper;
 
 import java.io.File;
 import java.io.IOException;
@@ -41,7 +42,7 @@ import java.lang.reflect.Method;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
+import java.util.Set;
 import java.util.zip.ZipFile;
 
 import dalvik.system.DexClassLoader;
@@ -57,6 +58,11 @@ public class ReflectAccelerator {
     // ActivityClientRecord
     private static Field sActivityClientRecord_intent_field;
     private static Field sActivityClientRecord_activityInfo_field;
+    // ClientTransaction
+    private static Field sClientTransaction_mActivityCallbacks_field;  // since Android P
+
+    private static ArrayMap<Object, WeakReference<Object>> sResourceImpls;
+    private static Object/*ResourcesImpl*/ sMergedResourcesImpl;
 
     private ReflectAccelerator() { /** cannot be instantiated */ }
 
@@ -181,7 +187,11 @@ public class ReflectAccelerator {
                 sDexElementClass = Class.forName("dalvik.system.DexPathList$Element");
             }
             if (sDexElementConstructor == null) {
-                sDexElementConstructor = sDexElementClass.getConstructors()[0];
+                if (Build.VERSION.SDK_INT >= 26) {
+                    sDexElementConstructor = sDexElementClass.getConstructor(new Class[]{DexFile.class, File.class});
+                } else {
+                    sDexElementConstructor = sDexElementClass.getConstructors()[0];
+                }
             }
             Class<?>[] types = sDexElementConstructor.getParameterTypes();
             switch (types.length) {
@@ -203,6 +213,11 @@ public class ReflectAccelerator {
                     } else {
                         // Element(File apk, File zip, DexFile dex)
                         return sDexElementConstructor.newInstance(pkg, pkg, dexFile);
+                    }
+                case 2:
+                    if (Build.VERSION.SDK_INT >= 26) {
+                        //Only SDK >= 26
+                        return sDexElementConstructor.newInstance(dexFile, pkg);
                     }
                 case 4:
                 default:
@@ -308,9 +323,9 @@ public class ReflectAccelerator {
         }
     }
 
-    private static final class V23_ extends V14_22 {
+    private static class V23_25 extends V14_22 {
 
-        private static Field sDexPathList_nativeLibraryPathElements_field;
+        protected static Field sDexPathList_nativeLibraryPathElements_field;
 
         public static void expandNativeLibraryDirectories(ClassLoader classLoader,
                                                           List<File> libPaths) {
@@ -352,6 +367,76 @@ public class ReflectAccelerator {
         }
     }
 
+    private static final class V26_ extends V23_25 {
+
+        private static Constructor sNativeLibraryElementConstructor;
+        private static Class sNativeLibraryElementClass;
+        private static Field sNativeLibrarysField;
+
+        /**
+         * <a href="https://android.googlesource.com/platform/libcore/+/android-o-preview-3/dalvik/src/main/java/dalvik/system/DexPathList.java">DexPathList.java</>
+         * @param libraryDir
+         * @return
+         * @throws Exception
+         */
+        private static Object makeNativeLibraryElement(File libraryDir) throws Exception {
+            if (sNativeLibraryElementClass == null) {
+                sNativeLibraryElementClass = Class.forName("dalvik.system.DexPathList$NativeLibraryElement");
+            }
+            if (sNativeLibraryElementConstructor == null) {
+                sNativeLibraryElementConstructor = sNativeLibraryElementClass.getConstructors()[0];
+                sNativeLibraryElementConstructor.setAccessible(true);
+            }
+            Class<?>[] types = sNativeLibraryElementConstructor.getParameterTypes();
+            switch (types.length) {
+                case 1:
+                    return sNativeLibraryElementConstructor.newInstance(libraryDir);
+                case 2:
+                default:
+                    return sNativeLibraryElementConstructor.newInstance(libraryDir, null);
+            }
+        }
+
+        public static void expandNativeLibraryDirectories(ClassLoader classLoader,
+            List<File> libPaths) {
+            if (sPathListField == null) return;
+
+            Object pathList = getValue(sPathListField, classLoader);
+            if (pathList == null) return;
+
+            if (sDexPathList_nativeLibraryDirectories_field == null) {
+                sDexPathList_nativeLibraryDirectories_field = getDeclaredField(
+                    pathList.getClass(), "nativeLibraryDirectories");
+                if (sDexPathList_nativeLibraryDirectories_field == null) return;
+            }
+
+            try {
+                // List<File> nativeLibraryDirectories
+                List<File> paths = getValue(sDexPathList_nativeLibraryDirectories_field, pathList);
+                if (paths == null) return;
+                paths.addAll(libPaths);
+
+                // NativeLibraryElement[] nativeLibraryPathElements
+                if (sDexPathList_nativeLibraryPathElements_field == null) {
+                    sDexPathList_nativeLibraryPathElements_field = getDeclaredField(
+                        pathList.getClass(), "nativeLibraryPathElements");
+                }
+                if (sDexPathList_nativeLibraryPathElements_field == null) return;
+
+                int N = libPaths.size();
+                Object[] elements = new Object[N];
+                for (int i = 0; i < N; i++) {
+                    Object dexElement = makeNativeLibraryElement(libPaths.get(i));
+                    elements[i] = dexElement;
+                }
+
+                expandArray(pathList, sDexPathList_nativeLibraryPathElements_field, elements, false);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
     //______________________________________________________________________________________________
     // API
 
@@ -381,12 +466,23 @@ public class ReflectAccelerator {
     }
 
     public static int[] addAssetPaths(AssetManager assets, String[] paths) {
-        if (sAssetManager_addAssetPaths_method == null) {
-            sAssetManager_addAssetPaths_method = getMethod(AssetManager.class,
-                    "addAssetPaths", new Class[]{String[].class});
+        if (Build.VERSION.SDK_INT < 28) {
+            if (sAssetManager_addAssetPaths_method == null) {
+                sAssetManager_addAssetPaths_method = getMethod(AssetManager.class,
+                        "addAssetPaths", new Class[]{String[].class});
+            }
+            if (sAssetManager_addAssetPaths_method == null) return null;
+            return invoke(sAssetManager_addAssetPaths_method, assets, new Object[]{paths});
+        } else {
+            // `AssetManager#addAssetPaths` becomes unavailable since android 9.0,
+            // use recursively `addAssetPath` instead.
+            int N = paths.length;
+            int[] ids = new int[N];
+            for (int i = 0; i < N; i++) {
+                ids[i] = addAssetPath(assets, paths[i]);
+            }
+            return ids;
         }
-        if (sAssetManager_addAssetPaths_method == null) return null;
-        return invoke(sAssetManager_addAssetPaths_method, assets, new Object[]{paths});
     }
 
     public static void mergeResources(Application app, Object activityThread, String[] assetPaths) {
@@ -400,9 +496,13 @@ public class ReflectAccelerator {
         addAssetPaths(newAssetManager, assetPaths);
 
         try {
-            Method mEnsureStringBlocks = AssetManager.class.getDeclaredMethod("ensureStringBlocks", new Class[0]);
-            mEnsureStringBlocks.setAccessible(true);
-            mEnsureStringBlocks.invoke(newAssetManager, new Object[0]);
+            if (Build.VERSION.SDK_INT < 28) {
+                Method mEnsureStringBlocks = AssetManager.class.getDeclaredMethod("ensureStringBlocks", new Class[0]);
+                mEnsureStringBlocks.setAccessible(true);
+                mEnsureStringBlocks.invoke(newAssetManager, new Object[0]);
+            } else {
+                // `AssetManager#ensureStringBlocks` becomes unavailable since android 9.0
+            }
 
             Collection<WeakReference<Resources>> references;
 
@@ -424,6 +524,12 @@ public class ReflectAccelerator {
 
                     references = (Collection) mResourceReferences.get(resourcesManager);
                 }
+
+                if (Build.VERSION.SDK_INT >= 24) {
+                    Field fMResourceImpls = resourcesManagerClass.getDeclaredField("mResourceImpls");
+                    fMResourceImpls.setAccessible(true);
+                    sResourceImpls = (ArrayMap)fMResourceImpls.get(resourcesManager);
+                }
             } else {
                 Field fMActiveResources = activityThread.getClass().getDeclaredField("mActiveResources");
                 fMActiveResources.setAccessible(true);
@@ -433,8 +539,12 @@ public class ReflectAccelerator {
                 references = map.values();
             }
 
-            for (WeakReference<Resources> wr : references) {
-                Resources resources = wr.get();
+            //to array
+            WeakReference[] referenceArrays = new WeakReference[references.size()];
+            references.toArray(referenceArrays);
+
+            for (int i = 0; i < referenceArrays.length; i++) {
+                Resources resources = (Resources) referenceArrays[i].get();
                 if (resources == null) continue;
 
                 try {
@@ -445,23 +555,29 @@ public class ReflectAccelerator {
                     Field mResourcesImpl = Resources.class.getDeclaredField("mResourcesImpl");
                     mResourcesImpl.setAccessible(true);
                     Object resourceImpl = mResourcesImpl.get(resources);
-                    //check if rom change resourceImpl may be a subclass of resourceImpl like miui8
                     Field implAssets;
                     try {
                         implAssets = resourceImpl.getClass().getDeclaredField("mAssets");
                     } catch (NoSuchFieldException e) {
+                        // Compat for MiUI 8+
                         implAssets = resourceImpl.getClass().getSuperclass().getDeclaredField("mAssets");
                     }
                     implAssets.setAccessible(true);
                     implAssets.set(resourceImpl, newAssetManager);
+
+                    if (Build.VERSION.SDK_INT >= 24) {
+                        if (resources == app.getResources()) {
+                            sMergedResourcesImpl = resourceImpl;
+                        }
+                    }
                 }
 
                 resources.updateConfiguration(resources.getConfiguration(), resources.getDisplayMetrics());
             }
 
             if (Build.VERSION.SDK_INT >= 21) {
-                for (WeakReference<Resources> wr : references) {
-                    Resources resources = wr.get();
+                for (int i = 0; i < referenceArrays.length; i++) {
+                    Resources resources = (Resources) referenceArrays[i].get();
                     if (resources == null) continue;
 
                     // android.util.Pools$SynchronizedPool<TypedArray>
@@ -476,6 +592,24 @@ public class ReflectAccelerator {
             }
         } catch (Throwable e) {
             throw new IllegalStateException(e);
+        }
+    }
+
+    public static void ensureCacheResources() {
+        if (Build.VERSION.SDK_INT < 24) return;
+        if (sResourceImpls == null || sMergedResourcesImpl == null) return;
+
+        Set<?> resourceKeys = sResourceImpls.keySet();
+        for (Object resourceKey : resourceKeys) {
+            WeakReference resourceImpl = (WeakReference)sResourceImpls.get(resourceKey);
+            if (resourceImpl != null && resourceImpl.get() != sMergedResourcesImpl) {
+                // Sometimes? the weak reference for the key was released by what
+                // we can not find the cache resources we had merged before.
+                // And the system will recreate a new one which only build with host resources.
+                // So we needs to restore the cache. Fix #429.
+                // FIXME: we'd better to find the way to KEEP the weak reference.
+                sResourceImpls.put(resourceKey, new WeakReference<Object>(sMergedResourcesImpl));
+            }
         }
     }
 
@@ -526,8 +660,10 @@ public class ReflectAccelerator {
             V9_13.expandNativeLibraryDirectories(classLoader, libPath);
         } else if (v < 23) {
             V14_22.expandNativeLibraryDirectories(classLoader, libPath);
+        } else if (v < 26){
+            V23_25.expandNativeLibraryDirectories(classLoader, libPath);
         } else {
-            V23_.expandNativeLibraryDirectories(classLoader, libPath);
+            V26_.expandNativeLibraryDirectories(classLoader, libPath);
         }
     }
 
@@ -547,11 +683,41 @@ public class ReflectAccelerator {
                 who, contextThread, token, target, intent, requestCode);
     }
 
+    public static boolean relaunchActivity(Activity activity,
+                                           Object/*ActivityThread*/ thread,
+                                           Object/*IBinder*/ activityToken) {
+        if (Build.VERSION.SDK_INT >= 11) {
+            activity.recreate();
+            return true;
+        }
+
+        try {
+            Method m = thread.getClass().getDeclaredMethod("getApplicationThread");
+            m.setAccessible(true);
+            Object /*ActivityThread$ApplicationThread*/ appThread = m.invoke(thread);
+            Class[] types = new Class[]{IBinder.class, List.class, List.class,
+                    int.class, boolean.class, Configuration.class};
+            m = appThread.getClass().getMethod("scheduleRelaunchActivity", types);
+            m.setAccessible(true);
+            m.invoke(appThread, activityToken, null, null, 0, false, null);
+            return true;
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+        return false;
+    }
+
     public static Intent getIntent(Object/*ActivityClientRecord*/ r) {
         if (sActivityClientRecord_intent_field == null) {
             sActivityClientRecord_intent_field = getDeclaredField(r.getClass(), "intent");
         }
         return getValue(sActivityClientRecord_intent_field, r);
+    }
+
+    public static ServiceInfo getServiceInfo(Object/*ActivityThread$CreateServiceData*/ data) {
+        Field f = getDeclaredField(data.getClass(), "info");
+        return getValue(f, data);
     }
 
     public static void setActivityInfo(Object/*ActivityClientRecord*/ r, ActivityInfo ai) {
@@ -560,6 +726,59 @@ public class ReflectAccelerator {
                     r.getClass(), "activityInfo");
         }
         setValue(sActivityClientRecord_activityInfo_field, r, ai);
+    }
+
+    public static List/*<LaunchActivityItem>*/ getLaunchActivityItems(Object t) {
+        if (sClientTransaction_mActivityCallbacks_field == null) {
+            sClientTransaction_mActivityCallbacks_field = getDeclaredField(t.getClass(), "mActivityCallbacks");
+        }
+        return getValue(sClientTransaction_mActivityCallbacks_field, t);
+    }
+
+    public static void setActivityInfoToLaunchActivityItem(Object item, ActivityInfo targetInfo) {
+        // The item maybe instance of different classes like
+        // `android.app.servertransaction.LaunchActivityItem`
+        // or `android.app.servertransaction.ActivityConfigurationChangeItem` and etc.
+        // So here we cannot cache one reflection field.
+        Field f = getDeclaredField(item.getClass(), "mInfo");
+        setValue(f, item, targetInfo);
+    }
+
+    public static Intent getIntentOfLaunchActivityItem(Object item) {
+        // The item maybe instance of different classes like
+        // `android.app.servertransaction.LaunchActivityItem`
+        // or `android.app.servertransaction.ActivityConfigurationChangeItem` and etc.
+        // So here we cannot cache one reflection field.
+        Field f = getDeclaredField(item.getClass(), "mIntent");
+        return getValue(f, item);
+    }
+
+    public static void resetResourcesAndTheme(Activity activity, int themeId) {
+        AssetManager newAssetManager = activity.getApplication().getAssets();
+        Resources resources = activity.getResources();
+
+        // Set the activity resources assets to the application one
+        try {
+            Field mResourcesImpl = Resources.class.getDeclaredField("mResourcesImpl");
+            mResourcesImpl.setAccessible(true);
+            Object resourceImpl = mResourcesImpl.get(resources);
+            Field implAssets = resourceImpl.getClass().getDeclaredField("mAssets");
+            implAssets.setAccessible(true);
+            implAssets.set(resourceImpl, newAssetManager);
+        } catch (Throwable e) {
+            android.util.Log.e("Small", "Failed to update resources for activity " + activity, e);
+        }
+
+        // Reset the theme
+        try {
+            Field mt = ContextThemeWrapper.class.getDeclaredField("mTheme");
+            mt.setAccessible(true);
+            mt.set(activity, null);
+        } catch (Throwable e) {
+            android.util.Log.e("Small", "Failed to update existing theme for activity " + activity, e);
+        }
+
+        activity.setTheme(themeId);
     }
 
     //______________________________________________________________________________________________
@@ -640,6 +859,10 @@ public class ReflectAccelerator {
     }
 
     private static <T> T getValue(Field field, Object target) {
+        if (field == null) {
+            return null;
+        }
+
         try {
             return (T) field.get(target);
         } catch (IllegalAccessException e) {
@@ -649,9 +872,28 @@ public class ReflectAccelerator {
     }
 
     private static void setValue(Field field, Object target, Object value) {
+        if (field == null) {
+            return;
+        }
+
         try {
             field.set(target, value);
         } catch (IllegalAccessException e) {
+            // Ignored
+            e.printStackTrace();
+        }
+    }
+
+    public static void setField(Class clazz, Object target, String name, Object value) throws Exception {
+        Field field = clazz.getDeclaredField(name);
+        field.setAccessible(true);
+        field.set(target, value);
+    }
+
+    public static void setFieldWithoutException(Class clazz, Object target, String name, Object value) {
+        try {
+            setField(clazz, target, name, value);
+        } catch (Exception e) {
             // Ignored
             e.printStackTrace();
         }

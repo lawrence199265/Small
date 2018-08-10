@@ -79,7 +79,8 @@ public class BundleParser {
             // activity
             public static int[] AndroidManifestActivity = {
                     0x01010000, 0x01010001, 0x01010002, 0x01010003,
-                    0x0101001d, 0x0101001e, 0x0101022b, 0x010102d3
+                    0x0101001d, 0x0101001e, 0x0101001f, 0x0101022b,
+                    0x010102d3
             };
             public static int AndroidManifestActivity_theme = 0;
             public static int AndroidManifestActivity_label = 1;
@@ -87,8 +88,9 @@ public class BundleParser {
             public static int AndroidManifestActivity_name = 3;
             public static int AndroidManifestActivity_launchMode = 4;
             public static int AndroidManifestActivity_screenOrientation = 5;
-            public static int AndroidManifestActivity_windowSoftInputMode = 6;
-            public static int AndroidManifestActivity_hardwareAccelerated = 7;
+            public static int AndroidManifestActivity_configChanges = 6;
+            public static int AndroidManifestActivity_windowSoftInputMode = 7;
+            public static int AndroidManifestActivity_hardwareAccelerated = 8;
             // data (for intent-filter)
             public static int[] AndroidManifestData = {
                     0x01010026, 0x01010027, 0x01010028, 0x01010029,
@@ -221,24 +223,6 @@ public class BundleParser {
                         app.className = null;
                     }
 
-                    // Get the label value which used as ABI flags.
-                    // This is depreciated, we read it from the `platformBuildVersionCode` instead.
-                    // TODO: Remove this if the gradle-small 0.9.0 or above being widely used.
-                    if (abiFlags == 0) {
-                        TypedValue label = new TypedValue();
-                        if (sa.getValue(R.styleable.AndroidManifestApplication_label, label)) {
-                            if (label.type == TypedValue.TYPE_STRING) {
-                                abiFlags = Integer.parseInt(label.string.toString());
-                            } else {
-                                abiFlags = label.data;
-                            }
-                        }
-                        if (abiFlags != 0) {
-                            throw new RuntimeException("Please recompile " + mPackageName
-                                    + " use gradle-small 0.9.0 or above");
-                        }
-                    }
-
                     app.theme = sa.getResourceId(
                             R.styleable.AndroidManifestApplication_theme, 0);
 
@@ -304,6 +288,7 @@ public class BundleParser {
                 ai.screenOrientation = sa.getInt(
                         R.styleable.AndroidManifestActivity_screenOrientation,
                         ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
+                ai.configChanges = sa.getInt(R.styleable.AndroidManifestActivity_configChanges, 0);
                 ai.softInputMode = sa.getInteger(
                         R.styleable.AndroidManifestActivity_windowSoftInputMode, 0);
 
@@ -513,10 +498,13 @@ public class BundleParser {
                     if (!dir.exists()) {
                         dir.mkdirs();
                     }
-                    if (!extractFile.exists()) {
-                        if (!extractFile.createNewFile()) {
-                            throw new RuntimeException("Failed to create file: " + extractFile);
+                    if (extractFile.exists()) {
+                        if (!extractFile.delete()) {
+                            throw new RuntimeException("Failed to delete file: " + extractFile);
                         }
+                    }
+                    if (!extractFile.createNewFile()) {
+                        throw new RuntimeException("Failed to create file: " + extractFile);
                     }
                     InputStream is = zipFile.getInputStream(je);
                     out = new RandomAccessFile(extractFile, "rw");

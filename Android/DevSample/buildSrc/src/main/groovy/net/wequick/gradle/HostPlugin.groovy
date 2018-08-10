@@ -1,7 +1,12 @@
 package net.wequick.gradle
 
 import com.android.build.gradle.api.BaseVariant
+import com.android.build.gradle.internal.pipeline.TransformTask
+import com.android.build.gradle.internal.transforms.ProGuardTransform
+import net.wequick.gradle.tasks.CleanBundleTask
 import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.tasks.compile.JavaCompile
 
 class HostPlugin extends AndroidPlugin {
 
@@ -33,6 +38,15 @@ class HostPlugin extends AndroidPlugin {
             // Add a build config to specify whether load-from-assets or not.
             android.defaultConfig.buildConfigField(
                     "boolean", "LOAD_FROM_ASSETS", rootSmall.buildToAssets ? "true" : "false")
+
+            // Support data binding
+            if (android.dataBinding.enabled) {
+                if (rootSmall.smallProject != null) {
+                    project.dependencies.add('compile', rootSmall.smallBindingProject)
+                } else {
+                    project.dependencies.add('compile', "${SMALL_BINDING_AAR_PREFIX}$rootSmall.bindingAarVersion")
+                }
+            }
         }
     }
 
@@ -50,13 +64,22 @@ class HostPlugin extends AndroidPlugin {
     protected void createTask() {
         super.createTask()
 
-        project.task('cleanLib', dependsOn: 'clean')
+        project.task('cleanLib', type: CleanBundleTask)
         project.task('buildLib')
+    }
+
+    @Override
+    protected void configureDebugVariant(BaseVariant variant) {
+        super.configureDebugVariant(variant)
+
+        hookDataBinding(variant.javaCompile, variant.dirName)
     }
 
     @Override
     protected void configureReleaseVariant(BaseVariant variant) {
         super.configureReleaseVariant(variant)
+
+        hookDataBinding(variant.javaCompile, variant.dirName)
 
         if (small.jar != null) return // Handle once for multi flavors
 
@@ -70,5 +93,62 @@ class HostPlugin extends AndroidPlugin {
             small.aapt = project.processReleaseResources
         }
         project.buildLib.dependsOn small.jar
+    }
+
+    @Override
+    protected void configureProguard(BaseVariant variant, TransformTask proguard, ProGuardTransform pt) {
+        super.configureProguard(variant, proguard, pt)
+        pt.keep('class android.databinding.** { *; }')
+        pt.dontwarn('small.databinding.**')
+        pt.keep('class small.databinding.** { *; }')
+        pt.keep('interface small.databinding.DataBinderMappable')
+    }
+
+    def hookDataBinding(JavaCompile javac, String variantDirName) {
+        if (!android.dataBinding.enabled) return
+
+        javac.doLast {
+            // Recompile android.databinding.DataBinderMapper
+            File aptDir = new File(project.buildDir, "generated/source/apt/$variantDirName")
+            if (!aptDir.exists()) {
+                return
+            }
+
+            File bindingPkgDir = new File(aptDir, 'android/databinding')
+            File dataBinderMapperJava = new File(bindingPkgDir, 'DataBinderMapper.java')
+            InputStreamReader ir = new InputStreamReader(new FileInputStream(dataBinderMapperJava))
+            String code = ''
+            String line
+            while ((line = ir.readLine()) != null) {
+                if (line.startsWith('class DataBinderMapper')) {
+                    code += 'class DataBinderMapper extends small.databinding.DataBinderMapper {\n'
+                    continue
+                }
+                if (line.startsWith('    public DataBinderMapper()')) {
+                    code += line + '\n'
+                    break
+                }
+                code += line + '\n'
+            }
+            code += '    }\n}'
+            ir.close()
+
+            File bak = new File(bindingPkgDir, 'DataBinderMapper.java~')
+            dataBinderMapperJava.renameTo(bak)
+
+            dataBinderMapperJava.createNewFile()
+            dataBinderMapperJava.write(code)
+
+            project.ant.javac(srcdir: bindingPkgDir,
+                    source: javac.sourceCompatibility,
+                    target: javac.targetCompatibility,
+                    destdir: javac.destinationDir,
+                    includes: 'DataBinderMapper.java',
+                    classpath: javac.classpath.asPath,
+                    bootclasspath: android.bootClasspath.join(';'),
+                    includeantruntime: false)
+
+            bak.renameTo(dataBinderMapperJava)
+        }
     }
 }

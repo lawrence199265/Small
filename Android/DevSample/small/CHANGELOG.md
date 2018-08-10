@@ -1,3 +1,132 @@
+## 1.5.0-beta2 (2018-07-06)
+
+Features:
+
+  - 支持 Android 9.0 (API 28)
+
+## 1.5.0-beta1 (2018-07-02)
+
+Features:
+
+  - 支持 Android 8.1 (API 27)
+
+## 1.3.0-beta6 (2018-04-24)
+
+Bugfixes:
+
+  - 修正 Android 8.0 以上，无法从内置 jar 包中读取文件的问题 (#574)
+
+## 1.3.0-beta5 (2017-12-13)
+
+Features:
+
+  - 增加 `HealthManager` 类，在资源错误引起的 crash 时打印必要的日志
+
+Bugfixes:
+
+  - 修正 7.0 多窗口模式的 crash (#548)
+  - 解决了一些特殊机型 AppTheme 问题
+
+## 1.3.0-beta3 (2017-10-28)
+
+版本同步
+
+## 1.3.0-alpha1 (2017-10-16)
+
+Features:
+
+  - 支持 Android O (8.0) (#526, @zhengxiaopeng)
+
+Bugfixes:
+
+  - 修正合并资源时可能出现的 ConcurrentModificationException (#508, @zhengxiaopeng)
+
+## 1.2.0 (2017-10-13)
+
+Bugfixes:
+
+  - 修正进程意外死亡重启后，StubActivity坑位问题 (#520, @xufan)
+
+## 1.3.0-beta2 (2017-06-16)
+
+版本同步
+
+## 1.2.0-alpha6 (2017-06-16)
+
+Bugfixes:
+
+  - 修正当前进程 Service 从后台唤起应用时未启动 Small 环境的问题
+
+## 1.3.0-beta1 (2017-06-12)
+
+版本同步
+
+## 1.2.0-alpha5 (2017-06-11)
+
+版本同步
+
+## 1.2.0-alpha4 (2017-06-06)
+
+Performance:
+
+  - 使用 BundleParser 来收集宿主 activities, 避免可能的多进程触发 AMS 调度 (#488)
+
+## 1.2.0-alpha3 (2017-05-31)
+
+版本同步
+
+## 1.2.0-alpha2 (2017-05-21)
+
+版本同步
+
+## 1.2.0-alpha1 (2017-05-21)
+
+Bugfixes:
+
+  - 修正插件升级时覆盖 so 文件的问题 (#477, @zhaoya188)
+  - 确保调用插件 Activity 前能成功拦截 Instrumentation
+
+## 1.2.0-beta5 (2017-05-13)
+
+版本同步
+
+## 1.2.0-beta4 (2017-05-09)
+
+Features:
+
+  - 支持在插件中配置 `android:configChanges` 属性
+  - 支持在 bundle.json 中的 `rules` 通过 "" key 来配置主路由
+
+Bugfixes:
+
+  - 修正在预装了 LBE 的系统上无法正确 hook mH 导致的崩溃问题 (@xufan)
+  - 修正插件manifest中未注册任何 Activity 时出现的空指针问题
+
+## 1.2.0-beta3 (2017-03-27)
+
+版本同步
+
+## 1.2.0-beta2 (2017-03-21)
+
+版本同步
+
+## 1.2.0-beta1 (2017-03-19)
+
+Bugfixes:
+
+  - 修正 7.0 下无法播放 raw 目录下视频的问题 (#429)
+
+## 1.1.0-alpha2 (2017-02-25)
+
+Bugfixes:
+
+  - 修正打包到assets下的apk包改变时未能正确被解压更新的问题
+  - 修正WebView判断加载相同url的错误
+
+Other:
+
+  - 导出WebView onProgressChanged事件
+
 ## 1.1.0-alpha1 (2017-01-09)
 
 Bugfixes:

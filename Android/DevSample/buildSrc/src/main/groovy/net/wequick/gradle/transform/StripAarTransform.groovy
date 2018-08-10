@@ -25,6 +25,7 @@ import com.android.build.api.transform.TransformInput
 import com.android.build.api.transform.TransformOutputProvider
 import com.android.build.gradle.internal.pipeline.TransformManager
 import net.wequick.gradle.AppExtension
+import net.wequick.gradle.util.AarPath
 import org.apache.commons.io.FileUtils
 import org.gradle.api.Project
 import org.gradle.api.Task
@@ -56,61 +57,42 @@ public class StripAarTransform extends Transform {
                    Collection<TransformInput> referencedInputs,
                    TransformOutputProvider outputProvider, boolean isIncremental)
             throws IOException, TransformException, InterruptedException {
-
         Project project = ((Task) context).project
         AppExtension small = project.small
-
-        Set<String> splitPaths = []
-        small.splitAars.each { Map<String, String> it ->
-            splitPaths.add(it.group + File.separator + it.name)
-        }
-
         inputs.each {
-
-            // Bypass the directories
+            // Filter the directories
             it.directoryInputs.each {
+                File src = it.file
+                AarPath aarPath = new AarPath(project, src)
+                for (aar in small.splitAars) {
+                    if (aarPath.explodedFromAar(aar)) {
+                        return
+                    }
+                }
+
                 File dest = outputProvider.getContentLocation(
-                        it.name, it.contentTypes, it.scopes, Format.DIRECTORY);
-                FileUtils.copyDirectory(it.file, dest)
+                        it.name, it.contentTypes, it.scopes, Format.DIRECTORY)
+                FileUtils.copyDirectory(src, dest)
             }
 
             // Filter the jars
             it.jarInputs.each {
+                // Strip jars in aar or build-cache under android plugin 2.3.0+
                 File src = it.file
-                def temp = splitPaths.find { src.absolutePath.contains(it) }
-                if (temp != null) {
-                    // Ignores the jar that should split
-                    return
+                AarPath aarPath = new AarPath(project, src)
+                for (aar in small.splitAars) {
+                    if (aarPath.explodedFromAar(aar)) {
+                        return
+                    }
                 }
 
-                // Copy the jar and rename
-                File version = src.parentFile
-                String versionName = version.name
-                String moduleName
-                if (versionName == 'jars') {
-                    // **/appcompat-v7/23.2.1/jars/classes.jar
-                    // => appcompat-v7-23.2.1.jar
-                    version = version.parentFile
-                    versionName = version.name
-                    moduleName = version.parentFile.name
-                } else if (versionName == 'libs') {
-                    versionName = src.name.substring(0, src.name.length() - 4) // bypass '.jar'
-                    if (version.parentFile.name == 'jars') {
-                        // **/support-v4/23.2.1/jars/libs/internal_impl-23.2.1.jar
-                        // => support-v4-internal_impl-23.2.1.jar
-                        moduleName = version.parentFile.parentFile.parentFile.name
-                    } else {
-                        // [projectDir]/libs/mylib.jar
-                        // => [projectName]-mylib.jar
-                        moduleName = "${project.name}"
-                    }
-                } else {
-                    moduleName = "${version.parentFile.parentFile.name}-${version.parentFile.name}"
+                String destName = aarPath.module.fileName
+                if (src.parentFile.name == 'libs') {
+                    destName += '-' + src.name.substring(0, src.name.lastIndexOf('.'))
                 }
-                String destName = "$moduleName-$versionName"
                 File dest = outputProvider.getContentLocation(
                         destName, it.contentTypes, it.scopes, Format.JAR)
-                FileUtils.copyFile(it.file, dest)
+                FileUtils.copyFile(src, dest)
             }
         }
     }

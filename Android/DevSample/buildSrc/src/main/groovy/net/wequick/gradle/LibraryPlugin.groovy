@@ -5,6 +5,7 @@ import com.android.build.gradle.api.BaseVariant
 import com.android.build.gradle.internal.pipeline.IntermediateFolderUtils
 import com.android.build.gradle.internal.pipeline.TransformTask
 import com.android.build.gradle.internal.transforms.ProGuardTransform
+import net.wequick.gradle.tasks.CleanBundleTask
 import org.apache.commons.io.FileUtils
 import org.gradle.api.Project
 
@@ -64,12 +65,9 @@ class LibraryPlugin extends AppPlugin {
         } else { //< apply: 'com.android.library'
             // Cause `isBuildingRelease()' return false, at this time, super's
             // `hookJavacTask' will not be triggered. Provided the necessary jars here.
-            def smallJar = project.fileTree(
-                    dir: rootSmall.preBaseJarDir, include: [SMALL_JAR_PATTERN])
-            def libJars = project.fileTree(dir: rootSmall.preLibsJarDir,
-                    include: mDependentLibProjects.collect { "$it.name-${it.version}.jar" })
-            project.dependencies.add('provided', smallJar)
-            project.dependencies.add('provided', libJars)
+            getLibraryJars().each {
+                project.dependencies.add('provided', project.files(it))
+            }
 
             // Resolve the transform tasks
             project.preBuild.doLast {
@@ -82,7 +80,7 @@ class LibraryPlugin extends AppPlugin {
                     def requiredOutput = IntermediateFolderUtils.getContentLocation(
                             t.streamOutputFolder, 'main',
                             t.transform.outputTypes, t.transform.scopes,
-                            Format.DIRECTORY) // folders/2000/1f/main
+                            t.transform.name == 'proguard'? Format.JAR: Format.DIRECTORY) // folders/2000/1f/main
                     def requiredScope = requiredOutput.parentFile // folders/2000/1f
                     if (requiredScope.exists()) return
                     def typesDir = requiredScope.parentFile // folders/2000
@@ -108,7 +106,7 @@ class LibraryPlugin extends AppPlugin {
     protected void createTask() {
         super.createTask()
 
-        project.task('cleanLib', dependsOn: 'clean')
+        project.task('cleanLib', type: CleanBundleTask)
         project.task('buildLib', dependsOn: 'assembleRelease')
 
         project.tasks.remove(project.cleanBundle)
@@ -122,6 +120,7 @@ class LibraryPlugin extends AppPlugin {
         // The `lib.*' modules are referenced by any `app.*' modules,
         // so keep all the public methods for them.
         pt.keep("class ${variant.applicationId}.** { public *; }")
+        pt.dontwarn("${variant.applicationId}.*")
     }
 
     @Override

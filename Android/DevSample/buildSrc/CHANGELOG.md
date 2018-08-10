@@ -1,3 +1,174 @@
+## 1.5.0-beta2 (2018-07-06)
+
+版本同步
+
+## 1.5.0-beta1 (2018-07-02)
+
+版本同步
+
+## 1.3.0-beta6 (2018-04-24)
+
+Bugfixes:
+
+  - 修正 UTF16 string pools 长度解析问题
+  - 修正 Windows 系统下 `BR.class` 被误删除的问题 (#544)
+
+## 1.3.0-beta5 (2017-12-15)
+
+版本同步
+
+## 1.3.0-beta3 (2017-10-28)
+
+Bugfixes:
+
+  - 修正插件、宿主混淆时找不到 `DataBinding` 相关类与方法的问题
+  - 修正宿主混淆后运行时找不到插件 `DataBinderMapper` 的问题
+
+## 1.3.0-alpha1 (2017-10-16)
+
+版本同步
+
+## 1.2.0 (2017-10-13)
+
+版本同步
+
+## 1.3.0-beta2 (2017-06-16)
+
+Bugfixes:
+
+  - 修正插件混淆时找不到 `DataBindingComponent` 的问题
+  - 修正插件混淆时重复指定 libraryJar 的问题 (#492)
+
+## 1.2.0-alpha6 (2017-06-16)
+
+Feature:
+
+  - `smallLint` 增加对宿主 `bundle.json` 配置校验
+
+Bugfixes:
+
+  - 修正未正确将 AAR 内部携带的 jar 打包入插件的问题
+  - 修正当模块名形如 'xx-1.0.0' 误被识别为插件模块的问题
+
+## 1.3.0-beta1 (2017-06-12)
+
+Features:
+
+  - 支持 `annotationProcessor`，包括 ButterKnife8, Dagger2 等
+  - 支持 `dataBinding`
+
+    > 需要在宿主 build.gradle 里开启 `dataBinding`
+
+## 1.2.0-alpha5 (2017-06-11)
+
+Bugfixes:
+
+  - 修正全局 `supportVersion` 导致的 `multidex` 依赖无法解析问题 (#456)
+  - 修正 `cleanLib` 没有 clean 宿主分身的问题
+
+## 1.2.0-alpha4 (2017-06-06)
+
+Bugfixes:
+
+  - 避免当分身 manifest 包含 provider 时，无法同步 lib.* 模块的问题 (#486)
+  - 避免在 Windows 系统下，更新插件资源调用的 `aapt add` 命令行过长导致的无法运行问题
+
+## 1.2.0-alpha3 (2017-05-31)
+
+Bugfixes:
+
+  - 修正未正确保留第三方资源导致的第三方 R 类找不到异常 (#483, #461)
+  - 插件资源分段算法添加黑名单过滤 (#481)
+  - 解决未开启 `buildCache` 时，解析 AarPath 出现 `Failed to parse aar module` 的问题
+
+Performance:
+
+  - `cleanLib`, `cleanBundle` 任务不再清空 debug 模式下的编译数据，避免 R 文件飘红，影响开发
+  - 避免在 `app-D.txt` 里重复添加 `support-compat` 与 `support-core-utils` 依赖
+
+## 1.2.0-alpha2 (2017-05-21)
+
+Bugfixes:
+
+  - 修正远程引用 gradle-small 时未能兼容 Kotlin 的问题
+
+## 1.2.0-alpha1 (2017-05-21)
+
+Features:
+
+  - 支持 Kotlin
+
+Bugfixes:
+
+  - 修正 AarPath 解析问题 (#485)
+
+Performance:
+
+  - 对插件移除新版 AS 自动生成的 `ic_launcher_round.png` 资源
+
+## 1.2.0-beta5 (2017-05-13)
+
+Bugfixes:
+
+  - 修正 gradle cache 路径兼容问题
+  - 修正在插件模块未配置 `local.properties` 时可能出现的编译问题 (#473, @zhaoya188)
+
+## 1.2.0-beta4 (2017-05-09)
+
+Features:
+
+  - 增加 `gradlew smallLint` 方法，用于检测插件编译问题
+
+Bugfixes:
+
+  - 修正 transform 目录冲突引起的 syncLibs 异常 (@xufan)
+  - 修正误提示：'请使用 gradle-small 0.9 以上编译' 的问题 (#313)
+  - 修正 Jar 中的 assets 资源被重复打包进插件的问题 (@xufan)
+
+## 1.2.0-beta3 (2017-03-27)
+
+Bugfixes:
+
+  - 修正 Android Plugin 2.3.0 下未能正确保留插件模块 JNI 的问题 (@xufan)
+  - 修正span类型字符串(`<b>Hello</b>`)无法被正确编译的问题 (#335, @jasonrongdevelop)
+
+Other:
+
+  - 使用8个空格替代`\t`来打印编译log，以保证整齐
+
+## 1.2.0-beta2 (2017-03-21)
+
+Bugfixes:
+
+  - 适配 Android Plugin 2.3.0 兼容 Windows
+
+## 1.2.0-beta1 (2017-03-19)
+
+Features:
+
+  - 兼容 Android Plugin 2.3.0 (@xufan)
+
+## 1.1.0-alpha2 (2017-02-25)
+
+Features:
+
+  - 增加 `gradlew smallLint` 任务用于检查插件问题
+    - 检查是否包含重复类，以避免 pre-verified 与 AppCompat主题闪退问题
+
+  - `aarVersion` 默认与 `gradle-small` 版本保持一致
+
+Bugfixes:
+
+  - 修正第三方jar未被分离的问题 (#378)
+  - 修正第三方so未被正确打包进插件的问题 (#367, #381)
+  - 修正 `support-compat` 与 `support-core-utils` 冲突的问题
+  - 修正不包含资源的插件包在混淆时无法编译的问题
+
+Refactor:
+
+  - 导出 util.Log 类用于打印彩色日志
+  - 使用 taskGraph 监听来完成插件编译开始与结束日志
+
 ## 1.1.0-beta4 (2016-12-12)
 
 Bugfixes:
